@@ -1,0 +1,625 @@
+---
+title: "Frequency Plot Optimisation"
+author: Cady Lancaster
+format: html
+editor: visual
+---
+
+## Optimization of Freqeuncy Plot for Modelling
+
+Original code by Nathalie Goeders, adapted for use by Cady Lancaster.
+
+### Prepare environment
+
+#### Load libraries
+
+```{r loadlib, echo=T, results='hide', message=F, warning=F}
+#| output: false
+
+cat("\014") # delete console output
+rm(list = ls()) # clear environment
+#setwd("…”) # Where the csv-files are, see binning
+# Load in the libraries
+# List of packages
+packages <- c(
+  "rpart",
+  "rpart.plot",
+  "randomForest",
+  "Formula",
+  "e1071",
+  "dplyr",
+  "MVA",
+  "MASS",
+  "ROCR",
+  "plot3D",
+  "matrixStats",
+  "fs",
+  "mlbench",
+  "caret",
+  "doParallel",
+  "tidyverse",
+  "dplyr"
+)
+
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg))
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)}
+
+ipak(packages)
+
+
+
+# Special installation for the development version of caret
+if (!requireNamespace("caret", quietly = TRUE)) {
+  devtools::install_github("topepo/caret/pkg/caret")
+}
+
+(getwd())
+
+```
+
+#### Source functions
+
+```{r}
+#| output: false
+
+# Set the main directory path
+mainDir <- "C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/"
+
+source(file.path(mainDir, 'R', 'readfilesv2.R')) 
+# Source the readfiles.R script from the specified directory
+source(file.path(mainDir, 'R', 'id_bins_for_columns.R'))
+# custom function to read all the files in
+source(file.path(mainDir, 'R', 'collect_max_values_opt_col_wise.R'))
+# keeps only columns with max values for each bin
+# id bins within interval
+source(file.path(mainDir, 'R', 'final_merge.R'))
+source(file.path(mainDir, 'R', 'data_prep.R'))  
+# prepare data with different mmus
+source(file.path(mainDir, 'R', 'class_counts.R')) 
+# class counts
+
+```
+
+#### Thresholding the txt files into heatmaps
+
+This provided code performs threshold-based data processing with some preparatory steps, file reading, and data manipulation.
+
+1\. **Threshold and Bin Sequence Initialization**
+
+-   `threshold` represents relative intensity thresholds to filter data.
+
+    `bin_seq` defines binning parameters, likely for grouping or discretizing data.
+
+2\. **Output List Initialization**
+
+-   `out_list` is initialized as a list with one entry for each value in `threshold`, filled with `NA` initially.
+
+-   Names for the list elements correspond to the threshold values.
+
+3\. **Data File Reading**
+
+-   **Files are read:**
+
+    -   `readfiles(fnames)` loads data files specified by `fnames`. If it fails, an error message is displayed.
+
+-   **Data is combined:**
+
+    -   `bind_rows()` merges the loaded files into a single data frame, adding a column `files` to identify their source.
+
+5\. **Processing Loop**
+
+-   The main loop iterates through the thresholds:
+
+    1.  **Filter Data:** Rows where the third column (likely intensity) exceeds the current threshold are retained (`data_th`).
+
+    2.  **Data Preparation:** The filtered data is passed to `data_prep()` alongside other parameters (`fnames`, `threshold[i]`, `bin_seq`).
+
+    3.  **Store Results:** The output of `data_prep()` is saved in the corresponding `out_list` element.
+
+```{r}
+#| output: false
+#| 
+setwd("C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/")
+
+data<-"C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/spectra"
+
+fnames <- fs::dir_ls(path = data, glob = '*.txt') # this is were you specify the data-folder with the txt-files
+
+
+# Load required libraries
+
+library(dplyr)
+
+#This will need to be duplicated in the visualisation of steps as well
+threshold <- c(1,2,5,10,50) # here you can give a sequence of tresholding if you want to use it
+thresh.par <- threshold
+bin_seq <- c(.005,.010, .050, .150, .250,1.000) # set mda.par in figure plotting
+mda.par <- bin_seq
+length(bin_seq)
+
+out_list <- as.list(rep(NA, length(threshold)))
+
+names(out_list) <- threshold
+
+# read in files, fl is a list with all the df
+fl <- readfiles(fnames)
+# gather all the files into 1 dataframe
+data <- bind_rows(fl, .id = 'files')
+
+
+```
+
+The next part creates the frequency plots according for the threshold and bin combinations.
+
+```{r}
+
+# Capture the overall start time before the loop
+start_time <- Sys.time()
+
+for (i in 1:length(threshold)) {
+  # Record the start time for this iteration
+  iteration_start_time <- Sys.time()
+  data_th <- data[data[, 3] > threshold[i] , ]
+  out_list[[i]] <- data_prep(
+    fnames,
+    threshold[i],
+    bin_seq,
+    save = TRUE,
+    cores = 1,
+    data = data_th
+  )
+  #print(paste0('Done for ', threshold[i]))
+  iteration_end_time <- Sys.time()
+  iteration_elapsed_time <- iteration_end_time - iteration_start_time
+  print(
+    paste0(
+      'Done for relative intensity threshold ',
+      threshold[i],
+      '%. Elapsed time: ',
+      round(iteration_elapsed_time, 2),
+      ' seconds'
+    )
+  )
+}
+```
+
+Next, the file information is used to append the file information to the frequency plots. This is assuming that the filenames are descriptive with some form of metadata.
+
+For the example below the filename is "Reference_PterocarpusSantalinus_RBGK24046_4.txt" so the type = Reference, species = PterocarpusSantalinus, ID = RBGK20246, and the replicate = 4. Adjust code as necessary to fit file name.
+
+```{r}
+
+type <- c()
+species<- c()
+ID <- c()
+replicate <- c()
+
+```
+
+#### Update Files
+
+1.  Extract the filenames from the filenames column of the heatmaps produced in the previous steps.
+2.  Split filename characteristics into columns
+
+Be sure to update the code below with the correct groupings.
+
+```{r}
+#| output: true
+
+#cat("\014") # delete console output
+#rm(list = ls()) # clear environment
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+library(fs)
+library(tidyverse)
+
+type <- c()
+species<- c()
+ID <- c()
+replicate <- c()
+
+# Directory containing CSV files
+output <- "C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/output/"
+
+# List all CSV files in the directory
+outlist <- fs::dir_ls(path = output, glob = "*.csv")
+
+# Process each file in the list
+for (file_path in outlist) {
+  # Read the original CSV file
+  original_data <- read.csv(file_path)
+  
+  # Extract file components
+  updated_data <- original_data %>%
+    mutate(across(everything(), ~ replace_na(.x, 0))) %>% # replace NaN's with zeroes
+    mutate(filename = basename(files),
+           # Extract file name
+           filename = sub("\\.txt$", "", filename)) %>% # Remove .txt extension) %>%
+    separate(
+      filename,
+      into = c("type", "species", "ID", "replicate"),
+      sep = "_",
+      remove = FALSE
+    ) 
+  
+  # Merge with metadata
+  phylo <- updated_data %>%
+    dplyr::select(type,species, ID, replicate, everything()) %>%
+    dplyr::select(-files, -filename)
+
+  
+  # Save the updated data back to the original file
+  write.csv(phylo, file = file_path, row.names = FALSE)
+  
+  # Confirm save
+  cat("File updated and saved successfully at:", file_path, "\n")
+}
+
+```
+
+## Hongmu: Frequency plot Evaluation via Random Forest Analysis
+
+Author: Cady Lancaster
+
+### Prepare environment
+
+```{r}
+
+#| 
+# Author: Cady Lancaster
+# Prepare environment
+cat("\014") # delete console output
+rm(list=ls()) # clear environment
+
+
+#library for tidyr
+library(tidyverse)
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg))
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)}
+packages <- c("rpart",
+  "rpart.plot",
+  "randomForest",
+  "Formula",
+  "e1071",
+  "dplyr",
+  "MVA",
+  "MASS",
+  "ROCR",
+  "plot3D",
+  "matrixStats",
+  "fs",
+  "mlbench",
+  "caret",
+  "doParallel"
+)
+ipak(packages)
+
+#if (!requireNamespace("devtools"))
+#  install.packages('devtools')
+#devtools::install_github('rstudio/rmarkdown')
+#
+#conflict_prefer("filter", "dplyr")
+#conflict_prefer("between", "dplyr")
+rm(list = ls(all.names = TRUE))
+
+wd <- ("C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/")
+
+# Load in the libraries
+mainDir<- ("C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/")
+
+```
+
+### Load Data
+
+```{r}
+
+# Load required libraries
+library(fs)  # Ensure fs is loaded
+library(dplyr)
+
+# READING DATA
+# Get the current working directory
+
+# Append the "output" folder to the working directory
+data <- file.path(wd, "output")
+
+fnames <- fs::dir_ls(path = data, glob = '*.csv')
+
+# read in csv's and store in list to checkl structure
+out <- lapply(fnames,read.csv) # loops can be cumbersome in R => apply-family functions
+length(fnames)
+
+#check format for which columns to exclude from the rf modelling
+test <- out[[1]]
+colnames(test[1:10])
+
+ref.data <- test %>% filter(type == "Reference") 
+
+ref.data = ref.data[,c(2,5:ncol(ref.data))] 
+
+ref.data[1:5,1:5]
+
+source(file.path(mainDir, 'R', 'class_counts.R')) 
+variable <- "species"
+table <- class_counts(ref.data,variable)
+table
+```
+
+Check the format of the data before continuing. Repeat the file cleaning from "test" before running the next step.
+
+### Modelling
+
+Variable columns are swapped as necessary to select different grouping variables (e.g., "country", "cluster", and country cluster.
+
+```{r}
+#| output: false
+
+# Set working directory
+
+wd <- ("C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/")
+
+# Load in the libraries
+mainDir<- ("C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/")
+
+
+# Source functions
+source(file.path(mainDir, 'R', 'optimise_preprocessing_backupforeshaw.R')) 
+source(file.path(mainDir, 'R', 'class_counts.R')) 
+
+
+# Append the "output" folder to the working directory
+data <- file.path(wd, "output")
+
+fnames <- fs::dir_ls(path = data, glob = '*.csv')
+
+
+num_iterations <- 20
+ntree <- 250
+datasplit <- 0.8  # proportion of data to use in training
+mtry <- 5  # starting mtry value; this will be tuned later
+counter <- 1
+
+goodcolumns<- "[,c(2,5:ncol(data))]" #variable = cluster
+
+#variable <- "species"
+#goodcolumns<- "[,c(6,10:ncol(data))]" #variable = species
+
+# Function wrapper to run test_rf on each file
+rf_test_wrapper <- function(f) {
+  # Read the dataset
+  df <- read.csv(f)
+  
+  print("Processing dataset:")
+  
+  df[1:5, 1:5]  # Print the first few rows of the dataset to confirm it's being passed
+  
+  df[is.na(df)] <- 0  # replace NaN's with zeroes
+  
+  df_filtered<- df %>% filter(type == "Reference") 
+  
+  # Ensure that the 'variable' is a factor
+  if (!is.factor(df_filtered[[variable]])) {
+    df_filtered[[variable]] <- as.factor(df_filtered[[variable]])
+  }
+  
+ # Run the custom `optimise_preprocessing` function on the dataset
+  optimise <- tryCatch({
+    optimise_preprocessing(
+      data = df_filtered,                 # Dataset to process
+      variable = variable,       # Response variable (target)
+      num_mtry = mtry,           # Number of variables randomly sampled at each split
+      num_iterations = num_iterations, # Number of iterations for cross-validation
+      ntree = ntree,             # Number of trees in the random forest
+      datasplit = datasplit,     # Proportion of data used for training
+      balance = TRUE,            # Balance the classes if TRUE
+      goodcolumns = goodcolumns # Columns to keep from the dataset
+    )
+  }, error = function(e) {
+    cat("[ERROR] Error in optimisation for file:", f, "\n")
+    cat(e$message, "\n")
+    return(NULL) # Return NULL if an error occurs during the processing
+  })
+  
+  # Check if the optimization was successful
+  if (is.null(optimise)) {
+    cat("[ERROR] Skipping file due to errors: ", f, "\n")
+    return(NULL)  # Skip saving the results if an error occurred
+  }
+  
+  # Save model results to file
+  counter <<- counter + 1
+  
+  base <- basename(f)
+  # Save model results to file
+  save(optimise, file = paste0(wd, "preds/Hongmu_",variable,"_model_results_", base, ".RData"))
+  print("[info] file processed!")
+  return(optimise)
+}
+
+# Apply the wrapper to each data frame in the list
+predictions <- lapply(fnames, rf_test_wrapper)
+
+# Save all predictions to a single file
+#save(predictions, file = paste0(variable,"_predictions.RData"))
+#this can be saved as a whole, but it tends to be a massive file. As each one is saved individually, this is unnecessary.
+
+```
+
+### Visualization
+
+This code was heavily adapted from the work of Thomas Mortier from Deklerck 2019.
+
+```{r}
+
+# Load in the libraries
+library(ggplot2)
+library(scales)
+library(caret)
+library(fs)
+
+
+threshold <- c(1,2,5,10,50) # here you can give a sequence of tresholding if you want to use it
+thresh.par <- threshold
+bin_seq <- c(.005,.010, .050, .150, .250,1.000) # set mda.par in figure plotting plotting
+mda.par <- bin_seq*1000
+length(bin_seq)
+variable <-  "species"
+continent <- "Asia"
+
+# Directory containing prediction files
+output <- "C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/preds/"
+
+# Initialize pred.data dataframe (make sure thresh.par and mda.par are defined)
+pred.data <- data.frame(
+  Threshold = rep(NA, length(thresh.par) * length(mda.par)),
+  mDa = rep(NA, length(thresh.par) * length(mda.par)),
+  Accuracy = rep(NA, length(thresh.par) * length(mda.par)),
+  AccuracySD = rep(NA, length(thresh.par) * length(mda.par)),
+  ntree = rep(NA, length(thresh.par) * length(mda.par))
+)
+
+counter <- 1
+
+
+# Function to process .RData files and extract results
+process_rdata_files <- function(wd, variable) {
+
+   # Define file pattern based on the variable
+  file_pattern <- paste0("Hongmu_",variable, "_model_results_data_thresh.*_mmu.*\\.csv\\.RData")
+  
+  
+  # List all matching files
+  file_list <- list.files(wd, pattern = file_pattern, full.names = TRUE)
+  
+# Initialize pred.data dataframe
+  pred.data <- data.frame(
+    Threshold = rep(NA, length(thresh.par) * length(mda.par)),
+    mDa = rep(NA, length(thresh.par) * length(mda.par)),
+    Accuracy = rep(NA, length(thresh.par) * length(mda.par)),
+    AccuracySD = rep(NA, length(thresh.par) * length(mda.par)),
+    ntree = rep(NA, length(thresh.par) * length(mda.par))
+  )
+  
+  # Counter for filling pred.data
+  counter <- 1
+  
+  # Loop through each file and extract data
+  for (file in file_list) {
+    # Load the .RData file
+    loaded_objects <- load(file)
+    
+    # Check if "optimise" object exists in the file
+    if ("optimise" %in% loaded_objects) {
+      data1 <- get("optimise")
+      data <- data1[[1]]
+      
+      # Extract threshold and mDa values from the filename
+      file_name <- basename(file)
+      threshold <- as.numeric(gsub(".*_thresh([0-9]+)_.*", "\\1", file_name))
+    mda <- as.numeric(gsub(".*_mmu([0-9\\.]+).*", "\\1", file_name))
+      #mda <- as.numeric(gsub(".*_mmu([0-9\\.]+)\\.csv", "\\1", file_name))
+      
+      # Fill pred.data
+      pred.data$Threshold[counter] <- threshold
+      pred.data$mDa[counter] <- mda
+      pred.data$Accuracy[counter] <- data$Accuracy
+      pred.data$AccuracySD[counter] <- data$AccuracySD
+      pred.data$ntree[counter] <- data$ntree
+      
+      # Increment counter
+      counter <- counter + 1
+    } else {
+      warning(paste("No 'optimise' object found in file:", file))
+    }
+  }
+  
+  # Return the final dataframe
+  return(pred.data)
+}
+
+# Example usage:
+wd <- "C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/preds/"
+
+# Process the .RData files and extract results
+pred.data <- process_rdata_files(wd, variable)
+
+# Print the results
+print(pred.data)
+
+
+pred.data$mDa <- as.factor(pred.data$mDa)
+pred.data$Threshold <- as.factor(pred.data$Threshold)
+# Display the filled pred.data
+print(pred.data)
+
+pred.data
+
+pred.data <- pred.data[!is.na(pred.data$Accuracy), ]
+
+colnames(pred.data) <- c("Threshold","mDa","Accuracy","AccuracySD","ntree")
+
+plot <- ggplot(data = pred.data, aes(x = mDa, y = Threshold, fill = Accuracy)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "red", high = "green", mid = "white",
+    midpoint = (min(pred.data$Accuracy) + max(pred.data$Accuracy)) / 2,
+    limit = c(min(pred.data$Accuracy), max(pred.data$Accuracy)),
+    space = "Lab", name = "Accuracy (%)"
+  ) +
+  geom_text(
+    aes(label = paste(round(Accuracy, 1), "%", "\n", "SD", round(AccuracySD, 1))),
+    color = "black", size = 3, hjust = 0.5, vjust = 0.5
+  ) +  # Center the text
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(vjust = 1, size = 12, hjust = 1),
+    axis.text.y = element_text(size = 14),
+    plot.title = element_text(hjust = 0.5, size = 10)
+  ) +
+  ggtitle(paste("Heatmap of Accuracy Across Threshold and mDa:",continent,"-",variable))+
+  xlab("Bin Size (mmu)") +
+  ylab("Relative Intensity Threshold (%)") +
+  coord_cartesian() # Remove coord_fixed() to allow more flexible aspect ratio
+
+plot
+
+# Create the plot file
+dev.copy(png, filename = paste0(wd, "/SouthAmerica_plot_",variable,"_", Sys.Date(), ".png"), res = 100, width = 450, height = 350)
+dev.off()
+```
+
+# References
+
+-   Wickham H, François R, Henry L, Müller K (2023). *dplyr: A Grammar of Data Manipulation*. R package version 1.1.3.\
+    <https://CRAN.R-project.org/package=dplyr>
+
+-   Wickham H (2019). *conflicted: An Alternative Conflict Resolution Strategy*. R package version 1.0.4.\
+    <https://CRAN.R-project.org/package=conflicted>
+
+-   Kassambara A (2023). *ggpubr: 'ggplot2' Based Publication Ready Plots*. R package version 0.6.0.\
+    <https://CRAN.R-project.org/package=ggpubr>
+
+-   Wickham H, Bryan J (2023). *tidyverse: Easily Install and Load the 'Tidyverse'*. R package version 2.0.0.\
+    <https://CRAN.R-project.org/package=tidyverse>
+
+-   Hahsler M, Piekenbrock M, Doran D (2023). *dbscan: Density-Based Spatial speciesing of Applications with Noise (DBSCAN) and Related Algorithms*. R package version 1.1-11.\
+    <https://CRAN.R-project.org/package=dbscan>
+
+-   Kuhn M (2023). *caret: Classification and Regression Training*. R package version 6.0-94.\
+    <https://CRAN.R-project.org/package=caret>
+
+-   Liaw A, Wiener M (2002). *Classification and Regression by randomForest*. *R News*, 2(3), 18-22.\
+    <https://CRAN.R-project.org/package=randomForest>
+
+-   Finch, K., Espinoza, E., Jones, F. A., & Cronn, R. (2017). Source identification of western Oregon Douglas‐fir wood cores using mass spectrometry and random forest classification. *Applications in Plant Sciences*, *5*(5), 1600158
+
+-   Xie Y (2023). knitr: A General-Purpose Package for Dynamic Report Generation in R. R package version 1.44. <https://CRAN.R-project.org/package=knitr>
+
+-   Zhu H (2023). kableExtra: Construct Complex Table with 'kable' and Pipe Syntax. R package version 1.3.4. <https://CRAN.R-project.org/package=kableExtra>

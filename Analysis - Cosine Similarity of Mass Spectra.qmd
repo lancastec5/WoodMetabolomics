@@ -1,0 +1,122 @@
+---
+title: "Cosine Similarity of Mass Spectra"
+author: "Cady Lancaster"
+format: html
+editor: visual
+---
+
+# Cosine Similarity of the Forshaw Woods to the Reference Spectra
+
+```{r}
+
+# Set the main directory path
+mainDir <- "C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/"
+
+source(file.path(mainDir, 'R', 'generate_similarity_heatmap.R')) 
+
+library(conflicted)
+library(tidyverse)
+
+library(readr)
+data <- read_csv(file.path(mainDir, "/output/data_thresh5_mmu50.csv"))
+data[is.na(data)] <- 0
+conflicts_prefer(dplyr::filter)
+
+#Unknown data to be classified
+unk.data <- data %>% filter(type == "Unknown") 
+unk.data = unk.data[,c(3,5:ncol(unk.data))] 
+unk.data <- unk.data %>% rename(class = ID)
+
+#reference data for referencing classification levels used from fit.list models
+ref.data <- data %>% filter(type == "Reference")
+ref.data = ref.data[,c(2,5:ncol(ref.data))] 
+ref.data <-ref.data  %>% rename( class = Species)
+ 
+total<- rbind(ref.data,unk.data)
+
+
+
+generate_similarity_heatmap(total,"class",scale_data = FALSE, "Cosine Similarity",1,0,round_digits = 1)
+```
+
+```{r}
+
+
+mainDir <- "C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/"
+
+source(file.path(mainDir, 'R', 'SpecEucDist.R')) 
+source(file.path(mainDir, 'R', 'hcax2.R')) 
+
+SpecEucDist(total,"class",scale_data =FALSE)
+hcax2(total,"class",scale_data = FALSE)
+
+```
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+
+# Assume your filtered spectral data is stored in a data frame called 'filtered_data'
+# Ensure the first column contains 'class' labels and the rest are numerical spectral data
+
+# Extract class labels
+class_labels <- filtered_data$class
+
+# Remove the 'class' column for PCA
+spectral_data <- filtered_data %>% select(-class)
+
+# Standardize the data (important for PCA when scales differ)
+spectral_data_scaled <- scale(spectral_data)
+
+# Perform PCA
+pca_result <- prcomp(spectral_data_scaled, center = TRUE, scale. = TRUE)
+
+# Create a data frame for visualization
+pca_df <- data.frame(
+  PC1 = pca_result$x[, 1],  # First principal component
+  PC2 = pca_result$x[, 2],  # Second principal component
+  Class = class_labels      # Add the class labels
+)
+
+# Generate a scatter plot of the PCA results
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Class)) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "PCA of Spectral Data",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "Class") +
+  theme(legend.position = "right") +
+  scale_color_manual(values = c("red", "blue", "green", "purple", "orange")) # Adjust colors as needed
+
+```
+
+# References
+
+-   Wickham H, François R, Henry L, Müller K (2023). *dplyr: A Grammar of Data Manipulation*. R package version 1.1.3.\
+    <https://CRAN.R-project.org/package=dplyr>
+
+-   Wickham H (2019). *conflicted: An Alternative Conflict Resolution Strategy*. R package version 1.0.4.\
+    <https://CRAN.R-project.org/package=conflicted>
+
+-   Kassambara A (2023). *ggpubr: 'ggplot2' Based Publication Ready Plots*. R package version 0.6.0.\
+    <https://CRAN.R-project.org/package=ggpubr>
+
+-   Wickham H, Bryan J (2023). *tidyverse: Easily Install and Load the 'Tidyverse'*. R package version 2.0.0.\
+    <https://CRAN.R-project.org/package=tidyverse>
+
+-   Hahsler M, Piekenbrock M, Doran D (2023). *dbscan: Density-Based Spatial speciesing of Applications with Noise (DBSCAN) and Related Algorithms*. R package version 1.1-11.\
+    <https://CRAN.R-project.org/package=dbscan>
+
+-   Kuhn M (2023). *caret: Classification and Regression Training*. R package version 6.0-94.\
+    <https://CRAN.R-project.org/package=caret>
+
+-   Liaw A, Wiener M (2002). *Classification and Regression by randomForest*. *R News*, 2(3), 18-22.\
+    <https://CRAN.R-project.org/package=randomForest>
+
+-   Finch, K., Espinoza, E., Jones, F. A., & Cronn, R. (2017). Source identification of western Oregon Douglas‐fir wood cores using mass spectrometry and random forest classification. *Applications in Plant Sciences*, *5*(5), 1600158
+
+-   Xie Y (2023). knitr: A General-Purpose Package for Dynamic Report Generation in R. R package version 1.44. <https://CRAN.R-project.org/package=knitr>
+
+-   Zhu H (2023). kableExtra: Construct Complex Table with 'kable' and Pipe Syntax. R package version 1.3.4. <https://CRAN.R-project.org/package=kableExtra>

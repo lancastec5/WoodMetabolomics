@@ -1,0 +1,584 @@
+---
+title: "RandomForest Modelling"
+author: "Cady Lancaster"
+format: html
+editor: visual
+---
+
+# Variable Selection
+
+Using the best or most realistic data set from the rough preprocessing, feature selection is then evaluated through multiple data-cleaning pipelines.
+
+# Environment Setup
+
+Loading packages, setting up the directory, loading data, and preparing data for analysis.
+
+```{r loadlib2, echo=T, results='hide', message=F, warning=F}
+
+library(dplyr)
+library(conflicted)
+library(ggpubr)
+library(tidyverse)
+library(dbscan)
+library(caret)
+library(randomForest)
+library(knitr)
+library(kableExtra)
+
+
+```
+
+Prep Environment
+
+```{r}
+# Set working directory
+setwd <- "C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/"
+
+# Set the main directory path
+mainDir <- "C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/"
+
+# prepare data with different mmus
+source(file.path(mainDir, 'R', 'class_counts.R'))
+# class counts
+
+library(readr)
+data <- read_csv(file.path(mainDir, "/output/data_thresh2_mmu1000.csv"),show_col_types = FALSE)
+data[sapply(data, is.numeric)][is.na(data[sapply(data, is.numeric)])] <- 0
+
+
+#data <- data %>% select(-filename)
+conflicts_prefer(dplyr::filter)
+ref.data <- data %>% filter(type == "Reference") 
+unk.data <- data %>% filter(type == "Unknown") #assumes something for classification
+
+ref.data = ref.data[,c(2,5:ncol(ref.data))] 
+
+#double checking format
+ref.data[1:5,1:5]
+
+#continent is used for file naming
+#variable refers to a column in the data that will be used to group data in the modelling.
+variable <- "species"
+continent <- "Hongmu"
+
+
+
+```
+
+```{r}
+
+# Source functions
+#source(file.path(mainDir, 'R', 'run_rf_parallel.R')) # for running large models
+source(file.path(mainDir, 'R', 'run_rfv2.R')) # for running small models
+source(file.path(mainDir, 'R', "cmstats_new3.R"))
+source(file.path(mainDir, 'R', 'importance_graphs.R'))
+source(file.path(mainDir, 'R', 'dataslice.R'))
+source(file.path(mainDir, 'R', 'lof_results.R'))
+source(file.path(mainDir, 'R', 'randomized_rfv2.R'))
+source(file.path(mainDir, 'R', 'plot_kdeoob_vs.R'))
+source(file.path(mainDir, 'R', 'runrf_mtryopt_v2024DEC.R'))
+
+```
+
+## Balanced Raw Data
+
+### Optimise mtry
+
+Optimise the mtry value using an abbreviated model setup. This takes a very long time. For very large datasets with many variables, in this case 1000-8000 features, mtry = 10 is a good default.
+
+```{r}
+
+#| label: mtry optmisation
+#| fig-cap: mtry Optimisation for the raw data. A brief randomforest model is run using species as the grouping variable. Ten models, repeatedly randomly samples, of 250 trees with a datasplit of 0.7.
+
+source(file.path(mainDir, 'R', 'runrf_mtryopt_v2024DEC.R'))
+
+#If you get an error right off, double check the df. Especially captilisation in the variable
+mtry_opt <- runrf_mtryopt(
+  ref.data,
+  variable,
+  num_iterations =20, 
+  ntree = 250,
+  datasplit = 0.8,
+  mtry_range = mtry_range <- seq(3, 60, by = 3),
+  balance = TRUE
+)
+mtry_opt$plot
+
+ReturnMax <- function(mtry_opt) {
+  optimal <- mtry_opt$mtry_df
+  return(optimal$mtry[which.max(optimal$overall_accuracy)][1])
+}
+
+mtry.raw <- ReturnMax(mtry_opt)
+
+mtry.raw
+#mtry.raw <- 55
+```
+
+### RF Model
+
+A balanced model is created using all features in the dataset. The data is first split into training and validation sets. To balance the classes in the training set, the smallest class size is used as a reference, and random sampling is applied to larger classes to match this size. The validation set remains unbalanced, but this does not affect the model
+
+```{r}
+#| label: Random Forest model of the "raw" data.
+#| fig-cap: Random forest analysis of the species classification using unfiltered feature variables. A randomforest model is run using species as the grouping variable. Fifty models, repeatedly randomly samples, of 500 trees with a datasplit of 0.75. Each training class if balanced to the smallest class. 
+
+#rf model parameters for species analysis
+num_iterations <- 50
+ntree <- 500
+datasplit <- 0.8
+mtry <- mtry.raw
+levels <- unique(ref.data[[variable]])
+
+
+model.balanced <- run_rf(ref.data,
+                         variable,
+                         num_iterations,
+                         ntree,
+                         datasplit,
+                         mtry,
+                         balance = TRUE)
+# Save all predictions to a single file
+filename <- paste0(mainDir,"/RFmodels/",
+                   "model.balanced",
+                   "_",continent,"_",
+                   variable,
+                   "_",
+                   Sys.Date(),
+                   ".RData")
+save(model.balanced, file = filename)
+```
+
+```{r}
+confusionmatrix <- model.balanced$conf_matrix
+training_class_size <- model.balanced$training_class_size
+#fit.list <- model.balanced$fit.list
+
+model.balanced$conf_matrix_percent
+
+model.balanced$conf_matrix
+
+cmstats.raw <- cmstats(confusionmatrix,
+        training_class_size,
+        model.balanced$fit.list,
+        variable,
+        levels)
+
+cmstats.raw[[1]] %>% knitr::kable(
+    format = "html",  # Specify the format here
+    digits = 2,
+    row.names = TRUE,
+    align = c("c", "c", "c", "c", "c", "c")
+  ) %>%
+    kableExtra::kable_styling(latex_options = "striped") %>%
+    kableExtra::column_spec(1, italic = TRUE) %>%
+    kableExtra::footnote(general = paste(
+      "Overall prediction accuracy:", cmstats.raw[[2]],
+      ". Model Information: randomForest model with ", ntree,
+      " trees reseeded over ", num_iterations,
+      " iterations with an mtry = ", mtry, "."
+    ),  footnote_as_chunk = TRUE,
+          threeparttable = TRUE) %>%
+    kableExtra::kable_styling("condensed")
+
+```
+
+## Sliced Model
+
+### Optimization
+
+Optimising the proportion of features to retain using the significance of the feature derived from the mean importance on the accuracy of the random forest model.
+
+```{r  , echo=T, results='hide', message=F, warning=F}
+#| echo: true
+#| output: false
+datakeep <- colnames(ref.data)[1]
+mean_imp <- model.balanced$mean_importance
+mean_imp <- mean_imp %>% dplyr::filter(variable != "filename" )
+slice_range <- seq(0.10, 1, by = 0.1) #the smallest 
+length(slice_range)
+
+slice_optimise <- function(data, variable, slice_range) {
+  # Initialize list to store results for each mtry value
+  slice_list <- list()
+  
+  # Loop over each mtry value in the specified range
+  for (i in seq_along(slice_range)) {
+    current_slice <- slice_range[i]
+    cat("slice =", slice_range[i], "\n")
+
+    sliced <- dataslice(data = data,
+                        variable = variable,
+                        datakeep = datakeep,
+                        mean_importance = mean_imp,
+                        slice = current_slice)
+    
+    #if there are errors check this line and make sure the selected data matches the variable
+    sliced.spectra <- sliced
+    
+    sliced.spectra[is.na(sliced.spectra)] <- 0  # replace NaN's with zeroes
+    #ncol(sliced.spectra)#sliced.spectra[1:10, 1:10]
+    
+    # Ensure that the 'variable' is a factor
+    if (!is.factor(sliced.spectra[[variable]])) {
+      sliced.spectra[[variable]] <- as.factor(sliced.spectra[[variable]])
+    }
+    
+    # Run the original run_rf function with the current mtry
+    rf_result <- run_rf(
+      data = sliced.spectra,
+      variable = variable,
+      num_iterations = 15,
+      ntree = 250,
+      datasplit = 0.7,
+      mtry = 10,
+      balance = TRUE
+    )
+    
+    # Calculate overall accuracy for this mtry
+    overall_accuracy <- rf_result$overall_accuracy
+    
+    # Store the accuracy and mtry value in the list
+    slice_list[[i]] <- list(slice = current_slice, overall_accuracy = overall_accuracy)
+  }
+  # Convert mtry_list to a data frame
+  slice_df <- do.call(rbind, lapply(slice_list, as.data.frame))
+  
+  # Plot using ggplot
+  library(ggplot2)
+  plot <- ggplot(slice_df, aes(x = slice, y = overall_accuracy)) +
+    geom_line() +
+    geom_point() +
+    labs(title = "Overall Accuracy vs Slice Size", x = "Slice", y = "Overall Accuracy")
+  
+  plot
+  
+  # Return list with accuracy results for each mtry
+  return(list(slice_df = slice_df, plot = plot))
+}
+
+sliceopt <- slice_optimise(ref.data,variable,slice_range)
+
+
+
+ReturnMaxSlice <- function(sliceopt) {
+  optimal <- sliceopt$slice_df
+  return(optimal$slice[which.max(optimal$overall_accuracy)][1])
+}
+
+
+
+```
+
+Printout separate.
+
+```{r}
+
+sliceopt$plot
+slicesize.slice <- ReturnMaxSlice(sliceopt)
+slicesize.slice
+```
+
+### Mtry Optimisation
+
+The dataslice function subsets the input data based on variable importance derived from the above random forest model.An optional mtry optimisation can be run for downstream analsysis as well.
+
+```{r}
+
+
+#| label: Slicing Data
+#| output: FALSE
+
+importance_graphs(model.balanced$mean_importance,variable,slicesize.slice)
+
+datakeep <- colnames(data)[1:4] #it could be useful to keep more of headers if doing something with the data down the line. 
+datakeep
+
+#temp <- model.balanced$mean_importance %>% dplyr::filter(variable != "filename")
+#sliced <- dataslice(data, variable, datakeep, temp, slicesize.slice)
+
+sliced <- dataslice(data, variable, datakeep, model.balanced$mean_importance, slicesize.slice) %>% filter(type == "Reference") 
+
+#if there are errors check this line and make sure the selected data matches the variable
+sliced.spectra<- sliced[,c(2,5:ncol(sliced))]
+
+sliced.spectra[is.na(sliced.spectra)] <- 0  # replace NaN's with zeroes
+sliced.spectra[1:10,1:10]
+
+
+# Ensure that the 'variable' is a factor
+if (!is.factor(sliced.spectra[[variable]])) {
+  sliced.spectra[[variable]] <- as.factor(sliced.spectra[[variable]])
+}
+
+
+source(file.path(mainDir, 'R', 'runrf_mtryopt_v2024DEC.R')) 
+# 
+mtry_opt.slice <- runrf_mtryopt(
+   sliced.spectra,
+   variable,
+   num_iterations = 10,
+   ntree = 250,
+   datasplit = 0.7,
+   mtry_range = mtry_range <- seq(1, 15, by = 1),
+   balance = TRUE
+ )
+ mtry_opt.slice$plot
+
+ReturnMax <- function(mtry_opt) {
+  optimal <- mtry_opt$mtry_df
+  return(optimal$mtry[which.max(optimal$overall_accuracy)][1])
+}
+
+mtry.slice <- ReturnMax(mtry_opt.slice)
+
+mtry.slice
+#stop and check maximum mtry
+```
+
+### Model Slicing the data and running the model.
+
+```{r}
+
+#| label: Random Forest model of the "sliced" data.
+#| fig-cap: Random forest analysis of the species classification using filtered feature variables. A randomforest model is run using species as the grouping variable. Fifty models, repeatedly randomly samples, of 500 trees with a datasplit of 0.75. Each training class if balanced to the smallest class. 
+
+mtry <- mtry.slice #change if needed from optimisation
+train.rf.sliced <- run_rf(sliced.spectra, variable,
+                          num_iterations,
+                          ntree,
+                          datasplit,
+                          mtry = mtry.slice,
+                          balance = TRUE)
+
+filename <- paste0(mainDir,"/RFmodels/",
+                   "train.rf.sliced",
+                   "_",continent,"_",
+                   variable,
+                   "_",
+                   Sys.Date(),
+                   ".RData")
+save(train.rf.sliced, file = filename)
+
+
+filename <- paste0(mainDir,"RFmodels/heatmap_",continent,"_","sliced","_", variable, "_", Sys.Date(), ".csv")
+write.csv(sliced.spectra,file = filename)
+
+
+levels <- unique(sliced.spectra[[variable]])
+
+train.rf.sliced$conf_matrix_percent
+
+train.rf.sliced$conf_matrix
+
+cmstats.sliced <-cmstats(
+  train.rf.sliced$conf_matrix,
+  train.rf.sliced$training_class_size,
+  train.rf.sliced$fit.list,
+  variable,
+  levels
+)
+
+cmstats.sliced[[1]] %>% knitr::kable(
+    format = "html",  # Specify the format here
+    digits = 2,
+    row.names = TRUE,
+    align = c("c", "c", "c", "c", "c", "c")
+  ) %>%
+    kableExtra::kable_styling(latex_options = "striped") %>%
+    kableExtra::column_spec(1, italic = TRUE) %>%
+    kableExtra::footnote(general = paste(
+      "Overall prediction accuracy:", cmstats.sliced[[2]],
+      ". Model Information: randomForest model with ", ntree,
+      " trees reseeded over ", num_iterations,
+      " iterations with an mtry = ", mtry, "."
+    ),  footnote_as_chunk = TRUE,
+          threeparttable = TRUE) %>%
+    kableExtra::kable_styling("condensed")
+
+```
+
+## Randomizing the Random Forest
+
+This function shuffles the data.
+
+```{r}
+#| label: Randomising data and running RF
+
+mtry <- mtry.raw
+
+random <- randomized_rfv2(ref.data,
+                         variable,
+                         num_iterations,
+                         ntree,
+                         datasplit,
+                         mtry,
+                         balance = TRUE)
+
+random$conf_matrix
+
+filename <- paste0(mainDir,"/RFmodels/",
+                   "random","_",continent,"_",variable,"_", Sys.Date(), ".RData")
+save(random, file = filename)
+
+random$conf_matrix_percent
+
+random$conf_matrix
+
+random.stats <- cmstats(
+  random$conf_matrix,
+  random$training_class_size,
+  random$fit.list,
+  levels = unique(ref.data[[variable]]))
+
+random.stats[[1]] %>% knitr::kable(
+    #format = "html",  # Specify the format here
+    digits = 2,
+    row.names = TRUE,
+    align = c("c", "c", "c", "c", "c", "c")
+  ) %>%
+    kableExtra::kable_styling(latex_options = "striped") %>%
+    kableExtra::column_spec(1, italic = TRUE) %>%
+    kableExtra::footnote(general = paste(
+      "Overall prediction accuracy:", random.stats[[2]],
+      ". Model Information: randomForest model with ", ntree,
+      " trees reseeded over ", num_iterations,
+      " iterations with an mtry = ", mtry, "."
+    ),  footnote_as_chunk = TRUE,
+          threeparttable = TRUE) %>%
+    kableExtra::kable_styling("condensed")
+```
+
+## Summary
+
+This is a measure of the internal error used to assess the model's performance excluding the separate validation dataset. It leverages the data samples not used during the bootstrapping process for each decision tree. The base code for working with the kernel density estimates was adapted from Finch et al. (2017).
+
+```{r}
+#| label: Kernel Density Estimates of the OOB for all models
+#| 
+oobs <- list( #LOF_Removal = train.lof$err.obs,
+               Raw = model.balanced$err.obs,
+               Sliced = train.rf.sliced$err.obs,
+               #Sliced_LOF = train.lof.sliced$err.obs,
+               Random = random$err.obs)
+ 
+results1 <- plot_kdeoob_vs(oobs, variable,0,105)
+# call function$KDE_plot for KDE plots 
+
+
+ 
+results2 <- plot_kdeoob_vs(oobs, variable,90,105)
+
+```
+
+Total Summary
+
+```{r}
+
+
+# Creating models with fit.median and overall_accuracy
+Raw <- list(
+  mean_err = round(mean(model.balanced$err.obs$OOB_Error, na.rm = TRUE)*100,1),
+  overall_accuracy = model.balanced$overall_accuracy,
+  mtry =mtry.raw,
+  Features = ncol(ref.data)-1,
+  Slice = "N/A",
+  F1ScoreBolivia = cmstats.raw$`F1 Score`[[1]],
+  F1ScoreEcuador= cmstats.raw$`F1 Score`[[2]],
+  F1ScoreBrazil = cmstats.raw$`F1 Score`[[3]]
+)
+
+Sliced <- list(
+  mean_err = round(mean(train.rf.sliced$err.obs$OOB_Error, na.rm = TRUE)*100,1),
+  overall_accuracy = train.rf.sliced$overall_accuracy,
+  mtry =mtry.slice,
+  Features = ncol(sliced.spectra)-1,
+  Slice = slicesize.slice*100,
+  F1ScoreBolivia = cmstats.sliced$`F1 Score`[[1]],
+  F1ScoreEcuador= cmstats.sliced$`F1 Score`[[2]],
+  F1ScoreBrazil = cmstats.sliced$`F1 Score`[[3]]
+)
+
+Random <- list(
+  mean_err = round(mean(random$err.obs$OOB_Error, na.rm = TRUE)*100,1),
+  overall_accuracy = random$overall_accuracy,
+  mtry = mtry.raw,
+  Features = ncol(ref.data)-1,
+  Slice =  "N/A",
+  F1ScoreBolivia = random.stats$`F1 Score`[[1]],
+  F1ScoreEcuador= random.stats$`F1 Score`[[2]],
+  F1ScoreBrazil = random.stats$`F1 Score`[[3]]
+)
+
+# Load the necessary library
+library(kableExtra)
+
+# Combine all the models' results into a data frame
+model_results <- data.frame(
+  Model = c("Raw", "Sliced", "Random"),
+  "Mean Error" = c(
+    mean(Raw$mean_err, na.rm = TRUE),
+    mean(Sliced$mean_err, na.rm = TRUE),
+   # mean(LOF$mean_err, na.rm = TRUE),
+    #mean(LOF_Sliced$mean_err, na.rm = TRUE),
+    mean(Random$mean_err, na.rm = TRUE)
+  ),
+  "Overall Accuracy" = c(
+    Raw$overall_accuracy,
+    Sliced$overall_accuracy,
+    #LOF$overall_accuracy,
+    #LOF_Sliced$overall_accuracy,
+    Random$overall_accuracy
+  ),
+  "mtry" = c(Raw$mtry, Sliced$mtry,  Random$mtry),
+  "Slice Size" = c(Raw$Slice, Sliced$Slice, Random$Slice),
+    "Features" = c(Raw$Features, Sliced$Features, Random$Features)
+)
+
+model_results <- model_results %>%
+  rename("Test Accuracy (%)" = `Overall.Accuracy`) %>%
+  rename("Training Accuracy (%)" = `Mean.Error`) %>%
+  rename("Mean Importance Slice (%)" = Slice.Size) %>%
+  rename("m/z Features (n)" = Features)
+
+# Create the kable table
+model_results %>%
+  kable(format = "html",
+        caption = "Hybrid Soybean: Model Summary",
+        align = c("l", "c", "c", "c", "c", "c")) %>%
+  kable_styling(full_width = FALSE, position = "center") %>%
+  kableExtra::kable_styling(latex_options = "striped") %>%
+  # kableExtra::column_spec(1, italic = TRUE) %>%
+  kableExtra::kable_styling("condensed")
+
+```
+
+# References
+
+-   Wickham H, François R, Henry L, Müller K (2023). *dplyr: A Grammar of Data Manipulation*. R package version 1.1.3.\
+    <https://CRAN.R-project.org/package=dplyr>
+
+-   Wickham H (2019). *conflicted: An Alternative Conflict Resolution Strategy*. R package version 1.0.4.\
+    <https://CRAN.R-project.org/package=conflicted>
+
+-   Kassambara A (2023). *ggpubr: 'ggplot2' Based Publication Ready Plots*. R package version 0.6.0.\
+    <https://CRAN.R-project.org/package=ggpubr>
+
+-   Wickham H, Bryan J (2023). *tidyverse: Easily Install and Load the 'Tidyverse'*. R package version 2.0.0.\
+    <https://CRAN.R-project.org/package=tidyverse>
+
+-   Hahsler M, Piekenbrock M, Doran D (2023). *dbscan: Density-Based Spatial speciesing of Applications with Noise (DBSCAN) and Related Algorithms*. R package version 1.1-11.\
+    <https://CRAN.R-project.org/package=dbscan>
+
+-   Kuhn M (2023). *caret: Classification and Regression Training*. R package version 6.0-94.\
+    <https://CRAN.R-project.org/package=caret>
+
+-   Liaw A, Wiener M (2002). *Classification and Regression by randomForest*. *R News*, 2(3), 18-22.\
+    <https://CRAN.R-project.org/package=randomForest>
+
+-   Finch, K., Espinoza, E., Jones, F. A., & Cronn, R. (2017). Source identification of western Oregon Douglas‐fir wood cores using mass spectrometry and random forest classification. *Applications in Plant Sciences*, *5*(5), 1600158
+
+-   Xie Y (2023). knitr: A General-Purpose Package for Dynamic Report Generation in R. R package version 1.44. <https://CRAN.R-project.org/package=knitr>
+
+-   Zhu H (2023). kableExtra: Construct Complex Table with 'kable' and Pipe Syntax. R package version 1.3.4. <https://CRAN.R-project.org/package=kableExtra>
