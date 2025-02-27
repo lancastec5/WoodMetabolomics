@@ -1,0 +1,404 @@
+---
+title: "PCA Analysis"
+author: "Cady Lancaster"
+format: docx
+editor: visual
+---
+
+## Likeness of Dalbergia
+
+```{r}
+
+
+cat("\014") # delete console output
+rm(list = ls()) # clear environment
+
+# Set the main directory path
+mainDir <- "C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/"
+
+source(file.path(mainDir, 'R', 'generate_similarity_heatmap.R')) 
+
+library(conflicted)
+library(tidyverse)
+library(FactoMineR)
+library(ggfortify)
+library(factoextra)
+library(scatterplot3d)
+library(ggplot2)
+library(ggpubr)
+library(gridExtra)
+library(grid)
+
+library(readr)
+data <- read_csv(file.path(mainDir, "/output/data_thresh2_mmu1000.csv"))
+data[sapply(data, is.numeric)][is.na(data[sapply(data, is.numeric)])] <- 0
+conflicts_prefer(dplyr::filter)
+
+#reference data for referencing classification levels used from fit.list models
+ref.data <- data %>% filter(type == "Reference")
+ref.data = ref.data[,c(2,5:ncol(ref.data))] 
+ref.data <-ref.data  %>% rename(class = species) 
+
+library(stringr)
+library(dplyr)
+
+df <- ref.data
+
+
+#My class names are GenusSpecies and this formats them to Genus species
+# Function to format class names
+format_class_name <- function(name) {
+  # Add a space before the second capital letter
+  formatted_name <- str_replace(name, "([a-z])([A-Z])", "\\1 \\2")
+  # Convert to sentence case
+  formatted_name <- str_to_sentence(formatted_name)
+  return(formatted_name)
+}
+
+# Apply function to the "class" column
+df <- df %>%
+  mutate(class = sapply(class, format_class_name))
+
+# View updated dataframe
+print(df)
+
+
+
+# Define target species
+targets <- c(
+  "Dalbergia latifolia",
+  "Dalbergia oliveri",
+  "Dalbergia cochinchinensis"
+  #"Pterocarpus macrocarpus"
+)
+
+# Filter the reference data to include only the target species
+filtered_data <- df %>% filter(class %in% targets)
+
+# View the filtered data
+print(filtered_data)
+
+mainDir <- "C:/Users/cla11kg/OneDrive - The Royal Botanic Gardens, Kew/R projects/ForeshawWood/foRshaw/"
+
+source(file.path(mainDir, 'R', 'SpecEucDist.R')) 
+source(file.path(mainDir, 'R', 'hcax2.R')) 
+source(file.path(mainDir, 'R', 'class_counts.R')) 
+
+#SpecEucDist(filtered_data,"class",scale_data =FALSE)
+#hcax2(filtered_data,"class",scale_data = FALSE)
+#class_counts(filtered_data,"class")
+```
+
+# Prep and clean data
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+
+# Assume your filtered spectral data is stored in a data frame called 'filtered_data'
+# Ensure the first column contains 'class' labels and the rest are numerical spectral data
+
+dim(filtered_data)
+
+# Extract class labels
+class_labels <- filtered_data$class
+
+conflicted::conflicts_prefer(dplyr::select)
+# Remove the 'class' column for PCA
+spectral_data <- filtered_data %>% select(-class)
+
+zero_var_cols <- apply(spectral_data, 2, var) == 0
+sum(zero_var_cols)  # Should match the number of columns you previously found
+
+spectral_data_filtered <- spectral_data[, !zero_var_cols]
+spectral_data_scaled <- scale(spectral_data_filtered)
+
+any(is.na(spectral_data_scaled))  # Check for missing values
+any(is.infinite(spectral_data_scaled))  # Check for infinite values
+
+which(is.na(spectral_data_scaled), arr.ind = TRUE)  # Find NaN locations
+which(is.infinite(spectral_data_scaled), arr.ind = TRUE)  # Find Inf locations
+
+spectral_data_scaled[is.na(spectral_data_scaled)] <- 0  # Replace NaNs with 0
+spectral_data_scaled[is.infinite(spectral_data_scaled)] <- 0  # Replace Infs with 0
+
+spectral_data_scaled <- spectral_data_scaled[complete.cases(spectral_data_scaled), ]
+
+pca_result <- prcomp(spectral_data_scaled, center = TRUE, scale. = TRUE)
+
+
+# Create a data frame for visualization
+pca_df <- data.frame(
+  PC1 = pca_result$x[, 1],  # First principal component
+  PC2 = pca_result$x[, 2],  # Second principal component
+  Class = class_labels      # Add the class labels
+)
+
+# Generate PCA plot
+library(ggplot2)
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Class)) +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "PCA of Spectral Data",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "Class") +
+  theme(legend.position = "right")
+
+# Create a data frame for visualization
+pca_df <- data.frame(
+  PC1 = pca_result$x[, 1],  # First principal component
+  PC2 = pca_result$x[, 2],  # Second principal component
+  Class = class_labels      # Add the class labels
+)
+
+fviz_eig(pca_result, 
+         addlabels = TRUE, 
+         ylim = c(0, 70),
+         main="")
+
+
+fviz_eig(pca_result, 
+         addlabels = TRUE, 
+         choice="eigenvalue",
+         main="Figure 5: Scree Plot") +
+    geom_hline(yintercept=1, 
+               linetype="dashed", 
+               color = "red")
+
+```
+
+# Outlier removal
+
+```{r}
+# Ensure PCA is performed on clean data
+pca_result <- prcomp(spectral_data_scaled, center = TRUE, scale. = TRUE)
+
+# Extract PCA scores
+pca_scores <- pca_result$x  # PC scores for each sample
+
+# Choose the first few PCs (e.g., PC1 and PC2) for outlier detection
+num_pcs <- 2  # Adjust if needed
+selected_pcs <- pca_scores[, 1:num_pcs]
+
+# Compute Mahalanobis Distance
+library(stats)
+center <- colMeans(selected_pcs)  # Mean of selected PCs
+cov_matrix <- cov(selected_pcs)  # Covariance matrix
+mahal_dist <- mahalanobis(selected_pcs, center, cov_matrix)
+
+# Define threshold for outliers (e.g., p < 0.001 in chi-squared distribution)
+threshold <- qchisq(0.90, df = num_pcs)  # 99.9% confidence level
+outliers <- mahal_dist > threshold  # TRUE if outlier
+
+# Remove outlier samples from the dataset
+spectral_data_filtered_no_outliers <- spectral_data_scaled[!outliers, ]
+
+class_labels <- filtered_data$class
+# Remove columns with a sum of 0 
+spectral_data_filtered_no_outliers <- spectral_data_filtered_no_outliers[, colSums(spectral_data_filtered_no_outliers) != 0]
+
+# Remove columns with zero variance (constant values)
+spectral_data_filtered_no_outliers <- spectral_data_filtered_no_outliers[, apply(spectral_data_filtered_no_outliers, 2, var) != 0]
+
+
+# Check how many samples were removed
+sum(outliers)
+
+
+
+```
+
+# PCA with outliers removed
+
+```{r}
+
+# Run PCA
+pca_result_final <- prcomp(spectral_data_filtered_no_outliers, center = TRUE, scale. = TRUE)
+
+# Ensure class_labels corresponds to the original dataset
+class_labels_filtered <- class_labels[!outliers]
+
+# Check if dimensions match
+print(dim(spectral_data_filtered_no_outliers))  # Should match length of class_labels_filtered
+print(length(class_labels_filtered))  # Should match number of rows in spectral_data_filtered_no_outliers
+
+
+# Create a data frame for visualization
+pca_df2 <- data.frame(
+  PC1 = pca_result_final$x[, 1],  # First principal component
+  PC2 = pca_result_final$x[, 2],
+  PC3 = pca_result_final$x[, 3],# Second principal component
+  Class = class_labels_filtered      # Add the class labels
+)
+
+# Generate PCA plot
+library(ggplot2)
+ggpca12<- ggplot(pca_df2, aes(x = PC1, y = PC2, color = Class)) +
+  stat_ellipse() +
+   geom_point(size = 3, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "A",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "Class") +
+  theme(
+    legend.position = c(1, 0), 
+    legend.justification = c(1, 0), legend.text =  element_text(face = "italic")
+  )+
+theme(legend.direction = "horizontal") +theme(text=element_text(size=10))+ theme(legend.text=element_text(size=10))
+ 
+
+ggpca13<- ggplot(pca_df2, aes(x = PC1, y = PC3, color = Class)) +
+  stat_ellipse() +
+   geom_point(size = 3, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "B",
+       x = "Principal Component 1",
+       y = "Principal Component 3",
+       color = "Class") +
+  theme(legend.position = "none") +theme(text=element_text(size=10))
+
+ggpca23<- ggplot(pca_df2, aes(x = PC2, y = PC3, color = Class)) +
+   stat_ellipse() +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_minimal() +
+  labs(title = "C",
+    x = "Principal Component 2",
+       y = "Principal Component 3",
+       color = "Class") +
+  theme(legend.position = "none") +theme(text=element_text(size=10))
+
+#function to extract the legend of a ggplot; source:
+#https://github.com/hadley/ggplot2/wiki/Share-a-legend-between-two-ggplot2-graphs
+get_legend<-function(a.gplot){
+  tmp <- ggplot_gtable(ggplot_build(a.gplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)}
+
+ggpca12_legend <- get_legend(ggpca12)
+
+grid.arrange(arrangeGrob(ggpca12 + theme(legend.position="none"), 
+                         ggpca13 + theme(legend.position="none"),
+                           ggpca23 + theme(legend.position="none"),nrow=1), 
+             ggpca12_legend, 
+             nrow=2,heights=c(10, 1))
+
+#ggarrange(ggpca12,ggpca13,ggpca23, nrow = 1)
+
+
+# Generate a scatter plot of the PCA results
+ggplot(pca_df2, aes(x = PC1, y = PC2, color = Class)) +
+  stat_ellipse() +
+  geom_point(size = 3, alpha = 0.8) +
+  theme_minimal() +
+  labs(       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "Class") +
+  theme(legend.position = "right") +
+  scale_color_manual(values = c("red", "blue", "green", "purple", "orange")) # Adjust colors as needed
+
+
+percent <- fviz_eig(pca_result_final, 
+         addlabels = TRUE, 
+         ylim = c(0, 25),
+         main="D")
+
+
+scree<-fviz_eig(pca_result_final, 
+         addlabels = TRUE, 
+         choice="eigenvalue",ylim = c(0, 75),
+         main="E"
+         ) +
+    geom_hline(yintercept=1, 
+               linetype="dashed", 
+               color = "red")
+
+# Load required libraries
+library(gridExtra)
+library(grid)
+
+# First row: PCA scatter plots
+pca_plots <- arrangeGrob(
+  ggpca12 + theme(legend.position="none"), 
+  ggpca13 + theme(legend.position="none"), 
+  ggpca23 + theme(legend.position="none"), 
+  nrow = 1
+)
+
+# Second row: Common legend
+legend_row <- ggpca12_legend
+
+# Third row: Scree and variance explained plots
+scree_percent_plots <- arrangeGrob(
+  scree, 
+  percent, 
+  nrow = 1
+)
+
+# Final arrangement
+grid.arrange(
+  pca_plots,  # First row
+  legend_row, # Second row (Legend)
+  scree_percent_plots, # Third row (Scree and Percent Variance Explained)
+  nrow = 3, heights = c(5, 0.5, 5) # Adjust heights as needed
+)
+
+```
+
+# Formatting the plots
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(factoextra)
+
+# Define a common theme for all plots
+common_theme <- theme(
+  text = element_text(size = 10),
+  legend.position = "none",
+  legend.text =  element_text(face = "italic"),
+  axis.title = element_text(size = 10),
+  axis.text = element_text(size = 10),
+  plot.title = element_text(size = 14),
+  strip.text = element_text(size = 10)
+)
+
+# Apply theme to all plots
+ggpca12 <- ggpca12 + common_theme
+ggpca13 <- ggpca13 + common_theme
+ggpca23 <- ggpca23 + common_theme
+scree <- scree + common_theme
+percent <- percent + common_theme
+
+# First row: PCA scatter plots (A, B, C)
+pca_plots <- arrangeGrob(
+  ggpca12, 
+  ggpca13, 
+  ggpca23, 
+  nrow = 1
+)
+
+# Second row: Common legend (F)
+legend_row <- ggpca12_legend  # No need to label
+
+# Third row: Scree and variance explained plots (D, E)
+scree_percent_plots <- arrangeGrob(
+  scree, 
+  percent, 
+  nrow = 1
+)
+
+# Final arrangement with labels
+grid.arrange(
+  pca_plots,       # First row: A, B, C
+  legend_row,      # Second row: F
+  scree_percent_plots, # Third row: D, E
+  nrow = 3, heights = c(5, 0.6, 5)
+)
+
+```
